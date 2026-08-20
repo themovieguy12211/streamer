@@ -1,0 +1,16 @@
+{
+  "name": "longform-streaming",
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently -n web,api,worker -c cyan,green,yellow \"npm run dev -w @streaming/web\" \"npm run dev -w @streaming/api\" \"npm run dev -w @streaming/worker\"",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "db:generate": "npm run db:generate -w @streaming/database",
+    "db:migrate": "npm run db:migrate -w @streaming/database"
+  },
+  "private": true,
+  "devDependencies": { "concurrently": "^9.1.2" },
+  "engines": { "node": ">=20.11" }
+}

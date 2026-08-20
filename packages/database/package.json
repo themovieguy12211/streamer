@@ -1,0 +1,9 @@
+{
+  "name": "@streaming/database",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": { "db:generate": "drizzle-kit generate", "db:migrate": "drizzle-kit migrate", "typecheck": "tsc --noEmit" },
+  "dependencies": { "drizzle-orm": "0.36.4", "postgres": "^3.4.5" },
+  "devDependencies": { "drizzle-kit": "0.28.1", "typescript": "5.7.2" }
+}

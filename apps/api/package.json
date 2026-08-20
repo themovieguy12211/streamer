@@ -1,0 +1,9 @@
+{
+  "name": "@streaming/api", "private": true, "type": "module",
+  "scripts": { "dev": "tsx watch src/server.ts", "build": "tsc", "start": "node dist/server.js", "lint": "tsc --noEmit" },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2", "@fastify/cors": "^11.3.0", "@fastify/rate-limit": "^11.2.0", "@fastify/sensible": "^6.0.5", "@streaming/ads": "*", "@streaming/billing": "*", "@streaming/database": "*", "@streaming/storage": "*",
+    "argon2": "^0.41.1", "bullmq": "^5.34.7", "dotenv": "^16.4.7", "drizzle-orm": "0.36.4", "fastify": "^5.2.0", "nanoid": "^5.0.9", "tsx": "^4.19.2", "zod": "^3.24.1"
+  },
+  "devDependencies": { "@types/node": "^22.10.5", "typescript": "^5.7.2" }
+}
