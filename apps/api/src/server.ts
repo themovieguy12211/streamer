@@ -260,24 +260,52 @@ app.get('/api/v1/ads/config/:videoId', async (request) => { const { videoId } = 
 app.post('/api/v1/videos/:id/upload', async (request) => {
   const { id } = z.object({ id: z.string() }).parse(request.params);
   await requireVideoOwner(request, id);
-  const data = await request.file();
-  if (!data) throw app.httpErrors.badRequest('No file provided');
-  const tempPath = join(tmpdir(), `streaming-src-${id}-${nanoid()}`);
-  const hash = createHash('sha256');
-  const hashTransform = new Transform({ transform(chunk, _enc, cb) { hash.update(chunk); this.push(chunk); cb(); } });
-  await pipeline(data.file, hashTransform, createWriteStream(tempPath));
-  const fileHash = hash.digest('hex');
-  // Deduplication: check if identical content is already encoded
-  const { data: existing } = await supabase.from('videos').select('hls_master_key, thumbnail_key, duration_seconds').eq('file_hash', fileHash).eq('status', 'READY').not('hls_master_key', 'is', null).limit(1);
-  if (existing?.[0]) {
-    const { hls_master_key, thumbnail_key, duration_seconds } = existing[0];
-    await supabase.from('videos').update({ status: 'READY', encoding_progress: 100, encoding_stage: 'deduplicated', hls_master_key, thumbnail_key, duration_seconds, file_hash: fileHash }).eq('id', id);
-    await fsApi.rm(tempPath, { force: true });
-    return { jobId: null, status: 'READY', deduplicated: true };
+  // If request is multipart (direct upload bypassing proxy), stream to disk
+  if (request.headers['content-type']?.startsWith('multipart/form-data')) {
+    const data = await request.file();
+    if (!data) throw app.httpErrors.badRequest('No file provided');
+    const tempPath = join(tmpdir(), `streaming-src-${id}-${nanoid()}`);
+    const hash = createHash('sha256');
+    const hashTransform = new Transform({ transform(chunk, _enc, cb) { hash.update(chunk); this.push(chunk); cb(); } });
+    await pipeline(data.file, hashTransform, createWriteStream(tempPath));
+    const fileHash = hash.digest('hex');
+    // Deduplication check
+    const { data: existing } = await supabase.from('videos').select('hls_master_key, thumbnail_key, duration_seconds').eq('file_hash', fileHash).eq('status', 'READY').not('hls_master_key', 'is', null).neq('id', id).limit(1);
+    if (existing?.[0]) {
+      const { hls_master_key, thumbnail_key, duration_seconds } = existing[0];
+      await supabase.from('videos').update({ status: 'READY', encoding_progress: 100, encoding_stage: 'deduplicated', hls_master_key, thumbnail_key, duration_seconds, file_hash: fileHash }).eq('id', id);
+      await fsApi.rm(tempPath, { force: true });
+      return { deduplicated: true, status: 'READY' };
+    }
+    await supabase.from('videos').update({ status: 'QUEUED', encoding_progress: 0, encoding_stage: 'queued', file_hash: fileHash }).eq('id', id);
+    const job = await queue.add('video.encode', { videoId: id, sourcePath: tempPath, fileHash }, { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: 100, removeOnFail: 500 });
+    await supabase.from('encoding_jobs').insert({ id: nanoid(), video_id: id, bull_job_id: String(job.id), state: 'QUEUED', stage: 'queued' });
+    return { jobId: job.id, status: 'QUEUED' };
   }
-  const { error: vidErr } = await supabase.from('videos').update({ status: 'QUEUED', encoding_progress: 0, encoding_stage: 'queued', file_hash: fileHash }).eq('id', id);
-  if (vidErr) throw vidErr;
-  const job = await queue.add('video.encode', { videoId: id, sourcePath: tempPath, fileHash }, { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: 100, removeOnFail: 500 });
+  // Otherwise return presigned URL for direct-to-B2 upload
+  const body = z.object({ fileName: z.string().min(1).max(255), contentType: z.string().regex(/^video\//), sizeBytes: z.number().int().positive().max(env.MAX_UPLOAD_BYTES) }).parse(request.body);
+  const key = `sources/${id}/${nanoid()}-${body.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const uploadUrl = await storage.uploadUrl(key, body.contentType);
+  await supabase.from('videos').update({ status: 'UPLOADING' }).eq('id', id);
+  return { uploadUrl, key, expiresIn: 3600 };
+});
+
+app.post('/api/v1/videos/:id/upload/complete', async (request) => {
+  const { id } = z.object({ id: z.string() }).parse(request.params);
+  await requireVideoOwner(request, id);
+  const body = z.object({ key: z.string(), fileName: z.string(), contentType: z.string().regex(/^video\//), sizeBytes: z.number().int().positive(), fileHash: z.string().optional() }).parse(request.body);
+  await supabase.from('videos').update({ status: 'QUEUED', encoding_progress: 0, encoding_stage: 'queued', ...(body.fileHash ? { file_hash: body.fileHash } : {}) }).eq('id', id);
+  // Deduplication: if same hash already encoded, reuse the HLS content
+  if (body.fileHash) {
+    const { data: existing } = await supabase.from('videos').select('hls_master_key, thumbnail_key, duration_seconds').eq('file_hash', body.fileHash).eq('status', 'READY').not('hls_master_key', 'is', null).neq('id', id).limit(1);
+    if (existing?.[0]) {
+      const { hls_master_key, thumbnail_key, duration_seconds } = existing[0];
+      await supabase.from('videos').update({ status: 'READY', encoding_progress: 100, encoding_stage: 'deduplicated', hls_master_key, thumbnail_key, duration_seconds }).eq('id', id);
+      storage.delete(body.key).catch(() => {});
+      return { jobId: null, status: 'READY', deduplicated: true };
+    }
+  }
+  const job = await queue.add('video.encode', { videoId: id, sourceKey: body.key }, { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: 100, removeOnFail: 500 });
   const { error: jobErr } = await supabase.from('encoding_jobs').insert({ id: nanoid(), video_id: id, bull_job_id: String(job.id), state: 'QUEUED', stage: 'queued' });
   if (jobErr) throw jobErr;
   return { jobId: job.id, status: 'QUEUED' };
