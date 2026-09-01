@@ -98,21 +98,14 @@ export default function UploadPage() {
         setState('uploading');
         setUploadProgress(0);
         setState('uploading'); setUploadProgress(0);
-        // Use DIRECT_API_URL to bypass the Next.js proxy for large file uploads
-        const directApi = process.env.NEXT_PUBLIC_DIRECT_API_URL ?? '/api/v1';
-        const uploadResp = await fetch(`${directApi}/videos/${vid}/upload`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fileName: uploadFile.name, contentType: uploadFile.type || 'video/mp4', sizeBytes: uploadFile.size }) });
+        const uploadResp = await fetch(`/api/v1/videos/${vid}/upload`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fileName: uploadFile.name, contentType: uploadFile.type || 'video/mp4', sizeBytes: uploadFile.size }) });
         if (!uploadResp.ok) { const b = await uploadResp.json().catch(() => null); throw new Error(b?.message ?? 'Failed to start upload.'); }
-        const uploadData = await uploadResp.json();
-        if (uploadData.uploadUrl) {
-          // Presigned URL mode (fallback when no direct API)
-          await uploadToB2(uploadData.uploadUrl, uploadFile, setUploadProgress);
-          const completeResp = await fetch(`${directApi}/videos/${vid}/upload/complete`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: uploadData.key, fileName: uploadFile.name, contentType: uploadFile.type || 'video/mp4', sizeBytes: uploadFile.size }) });
-          if (!completeResp.ok) { const b = await completeResp.json().catch(() => null); throw new Error(b?.message ?? 'Failed to complete upload.'); }
-          const completeData = await completeResp.json();
-          if (completeData.deduplicated) { setState('ready'); setMessage('Your video is ready!'); return; }
-        } else if (uploadData.deduplicated) {
-          setState('ready'); setMessage('Your video is ready!'); return;
-        }
+        const { uploadUrl, key } = await uploadResp.json();
+        await uploadToB2(uploadUrl, uploadFile, setUploadProgress);
+        const completeResp = await fetch(`/api/v1/videos/${vid}/upload/complete`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, fileName: uploadFile.name, contentType: uploadFile.type || 'video/mp4', sizeBytes: uploadFile.size }) });
+        if (!completeResp.ok) { const b = await completeResp.json().catch(() => null); throw new Error(b?.message ?? 'Failed to complete upload.'); }
+        const completeData = await completeResp.json();
+        if (completeData.deduplicated) { setState('ready'); setMessage('Your video is ready!'); return; }
         setState('encoding'); setEncodeStatus({ status: 'QUEUED', progress: 0, stage: 'queued', error: null }); setMessage('Upload complete. Encoding in progress...');
       }
     } catch (err) {
