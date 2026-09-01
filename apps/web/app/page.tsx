@@ -7,15 +7,15 @@ export default async function Home() {
   const api = process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
   const cookieStore = await cookies();
   const cookieHeader = cookieStore.getAll().map((c) => `${c.name}=${c.value}`).join('; ');
-  const headers = cookieHeader ? { Cookie: cookieHeader } : {};
+  const fetchHeaders: Record<string, string> = cookieHeader ? { Cookie: cookieHeader } : {};
 
   let videos: Video[] = [];
   let user: { role: string; displayName: string } | null = null;
 
   try {
     const [videosRes, meRes] = await Promise.all([
-      fetch(`${api}/videos?limit=10`, { cache: 'no-store', headers }),
-      fetch(`${api}/auth/me`, { cache: 'no-store', headers }),
+      fetch(`${api}/videos?limit=10`, { cache: 'no-store', headers: fetchHeaders }),
+      fetch(`${api}/auth/me`, { cache: 'no-store', headers: fetchHeaders }),
     ]);
     if (videosRes.ok) videos = (await videosRes.json()).data;
     if (meRes.ok) user = (await meRes.json()).user;
