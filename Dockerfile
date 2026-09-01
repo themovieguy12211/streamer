@@ -14,7 +14,7 @@ RUN npm install
 COPY . .
 ENV NEXT_PUBLIC_API_URL=/api/v1
 ENV INTERNAL_API_URL=http://127.0.0.1:4000/api/v1
-RUN npm run build -w @streaming/web && npm run build -w @streaming/api && npm run build -w @streaming/worker
+RUN npm run build -w @streaming/web
 COPY docker/supervisord.conf /etc/supervisor/conf.d/streaming.conf
 EXPOSE 3000
 CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/streaming.conf"]
