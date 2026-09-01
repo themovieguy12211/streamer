@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 type EncodeStatus = { status: string; progress: number | null; stage: string | null; error: string | null };
 type SourceMode = 'upload-file' | 'import-url';
 
-function uploadWithProgress(apiUrl: string, file: File, onProgress: (pct: number) => void): Promise<{ jobId: string }> {
+function uploadWithProgress(apiUrl: string, file: File, onProgress: (pct: number) => void): Promise<{ jobId: string | null; deduplicated?: boolean }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.upload.addEventListener('progress', (e) => { if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100)); });
