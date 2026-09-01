@@ -1,8 +1,13 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
+import { createWriteStream } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { Queue } from 'bullmq';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -29,6 +34,7 @@ const cookieOptions = { httpOnly: true, secure: env.NODE_ENV === 'production', s
 
 await app.register(cookie);
 await app.register(cors, { origin: true, credentials: true });
+await app.register(multipart, { limits: { fileSize: env.MAX_UPLOAD_BYTES } });
 await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 await app.register(sensible);
 app.setErrorHandler((caught, _request, reply) => { const error = caught as Error & { statusCode?: number }; app.log.error(error); reply.code(error.statusCode ?? 500).send({ error: 'REQUEST_FAILED', message: error.message }); });
@@ -252,26 +258,13 @@ app.get('/api/v1/ads/config/:videoId', async (request) => { const { videoId } = 
 app.post('/api/v1/videos/:id/upload', async (request) => {
   const { id } = z.object({ id: z.string() }).parse(request.params);
   await requireVideoOwner(request, id);
-  const body = z.object({ fileName: z.string().min(1).max(255), contentType: z.string().regex(/^video\//), sizeBytes: z.number().int().positive().max(env.MAX_UPLOAD_BYTES) }).parse(request.body);
-  const key = `sources/${id}/${nanoid()}-${body.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-  const uploadUrl = await storage.uploadUrl(key, body.contentType);
-  const { error } = await supabase.from('videos').update({ status: 'UPLOADING' }).eq('id', id);
-  if (error) throw error;
-  return { uploadUrl, key, expiresIn: 3600 };
-});
-
-app.post('/api/v1/videos/:id/upload/complete', async (request) => {
-  const { id } = z.object({ id: z.string() }).parse(request.params);
-  await requireVideoOwner(request, id);
-  const body = z.object({ key: z.string().startsWith(`sources/${id}/`), fileName: z.string(), contentType: z.string().regex(/^video\//), sizeBytes: z.number().int().positive() }).parse(request.body);
-  const metadata = await storage.getObjectMetadata(body.key);
-  if (!metadata.contentLength || metadata.contentLength > env.MAX_UPLOAD_BYTES) throw app.httpErrors.badRequest('Invalid uploaded object');
-  const sourceId = nanoid();
-  const { error: srcErr } = await supabase.from('video_sources').insert({ id: sourceId, video_id: id, object_key: body.key, file_name: body.fileName, content_type: body.contentType, size_bytes: metadata.contentLength });
-  if (srcErr) throw srcErr;
+  const data = await request.file();
+  if (!data) throw app.httpErrors.badRequest('No file provided');
+  const tempPath = join(tmpdir(), `streaming-src-${id}-${nanoid()}`);
+  await pipeline(data.file, createWriteStream(tempPath));
   const { error: vidErr } = await supabase.from('videos').update({ status: 'QUEUED', encoding_progress: 0, encoding_stage: 'queued' }).eq('id', id);
   if (vidErr) throw vidErr;
-  const job = await queue.add('video.encode', { videoId: id, sourceKey: body.key }, { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: 100, removeOnFail: 500 });
+  const job = await queue.add('video.encode', { videoId: id, sourcePath: tempPath }, { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: 100, removeOnFail: 500 });
   const { error: jobErr } = await supabase.from('encoding_jobs').insert({ id: nanoid(), video_id: id, bull_job_id: String(job.id), state: 'QUEUED', stage: 'queued' });
   if (jobErr) throw jobErr;
   return { jobId: job.id, status: 'QUEUED' };

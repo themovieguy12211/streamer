@@ -5,15 +5,17 @@ import { useEffect, useRef, useState } from 'react';
 type EncodeStatus = { status: string; progress: number | null; stage: string | null; error: string | null };
 type SourceMode = 'upload-file' | 'import-url';
 
-function uploadWithProgress(url: string, file: File, onProgress: (pct: number) => void): Promise<void> {
+function uploadWithProgress(apiUrl: string, file: File, onProgress: (pct: number) => void): Promise<{ jobId: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.upload.addEventListener('progress', (e) => { if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100)); });
-    xhr.open('PUT', url);
-    xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
-    xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(`Upload failed: ${xhr.status}`)));
+    xhr.open('POST', apiUrl);
+    xhr.withCredentials = true;
+    const form = new FormData();
+    form.append('file', file);
+    xhr.onload = () => xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(`Upload failed: ${xhr.status}`));
     xhr.onerror = () => reject(new Error('Upload failed'));
-    xhr.send(file);
+    xhr.send(form);
   });
 }
 
@@ -93,26 +95,11 @@ export default function UploadPage() {
         setEncodeStatus({ status: 'QUEUED', progress: 0, stage: 'queued', error: null });
         setMessage('Import queued. Encoding in progress...');
       } else {
-        // Step 2a: upload file
+        // Step 2a: upload file directly to server
         if (!uploadFile) throw new Error('Please select a video file.');
         setState('uploading');
         setUploadProgress(0);
-        const uploadResp = await fetch(`/api/v1/videos/${vid}/upload`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ fileName: uploadFile.name, contentType: uploadFile.type || 'video/mp4', sizeBytes: uploadFile.size }),
-        });
-        if (!uploadResp.ok) { const b = await uploadResp.json().catch(() => null); throw new Error(b?.message ?? 'Failed to start upload.'); }
-        const { uploadUrl, key } = await uploadResp.json();
-        await uploadWithProgress(uploadUrl, uploadFile, setUploadProgress);
-        const completeResp = await fetch(`/api/v1/videos/${vid}/upload/complete`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ key, fileName: uploadFile.name, contentType: uploadFile.type || 'video/mp4', sizeBytes: uploadFile.size }),
-        });
-        if (!completeResp.ok) { const b = await completeResp.json().catch(() => null); throw new Error(b?.message ?? 'Failed to complete upload.'); }
+        await uploadWithProgress(`/api/v1/videos/${vid}/upload`, uploadFile, setUploadProgress);
         setState('encoding');
         setEncodeStatus({ status: 'QUEUED', progress: 0, stage: 'queued', error: null });
         setMessage('Upload complete. Encoding in progress...');

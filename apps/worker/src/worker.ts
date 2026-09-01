@@ -18,7 +18,7 @@ const storage = new B2StorageProvider({ endpoint: env.B2_ENDPOINT, region: env.B
 const run = (command: string, args: string[], onProgress?: (line: string) => void) => new Promise<void>((resolve, reject) => { const process = spawn(command, args); process.stderr.on('data', (chunk) => onProgress?.(chunk.toString())); process.on('error', reject); process.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with ${code}`))); });
 
 const worker = new Worker('video.encode', async (job) => {
-  const { videoId, sourceKey, sourceUrl } = z.object({ videoId: z.string(), sourceKey: z.string().optional(), sourceUrl: z.string().url().optional() }).refine((d) => d.sourceKey ?? d.sourceUrl, 'Either sourceKey or sourceUrl is required').parse(job.data);
+  const { videoId, sourceKey, sourceUrl, sourcePath } = z.object({ videoId: z.string(), sourceKey: z.string().optional(), sourceUrl: z.string().url().optional(), sourcePath: z.string().optional() }).refine((d) => d.sourceKey ?? d.sourceUrl ?? d.sourcePath, 'Either sourceKey, sourceUrl or sourcePath is required').parse(job.data);
   const directory = await mkdtemp(join(tmpdir(), `streaming-${videoId}-`));
   const source = join(directory, 'source');
   try {
@@ -26,7 +26,9 @@ const worker = new Worker('video.encode', async (job) => {
     if (e1) throw e1;
     const { error: e2 } = await supabase.from('encoding_jobs').update({ state: 'PROCESSING', progress: 1, stage: 'downloading' }).eq('bull_job_id', String(job.id));
     if (e2) throw e2;
-    if (sourceUrl) {
+    if (sourcePath) {
+      await fs.rename(sourcePath, source).catch(() => fs.copyFile(sourcePath, source).then(() => fs.rm(sourcePath, { force: true })));
+    } else if (sourceUrl) {
       const response = await fetch(sourceUrl);
       if (!response.ok || !response.body) throw new Error(`Failed to fetch source URL: ${response.status} ${response.statusText}`);
       await pipeline(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(source));
