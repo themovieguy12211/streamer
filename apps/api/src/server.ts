@@ -508,4 +508,6 @@ app.patch('/api/v1/admin/withdrawals/:id', async (request) => {
   return { ok: true };
 });
 
+const appOrigin = env.NEXT_PUBLIC_APP_URL ?? 'https://piracy.cloud';
+storage.setCors([appOrigin]).catch(err => app.log.warn(`CORS setup failed: ${err.message}`));
 await app.listen({ port: env.API_PORT, host: '0.0.0.0' });

@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutBucketCorsCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Readable } from 'node:stream';
 
@@ -13,6 +13,7 @@ export class B2StorageProvider implements StorageProvider {
   async getSignedUrl(key: string, expiresIn = 900) { return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.config.bucket, Key: key }), { expiresIn }); }
   async getObjectMetadata(key: string) { const result = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: key })); return { contentLength: result.ContentLength, contentType: result.ContentType }; }
   uploadUrl(key: string, contentType: string, expiresIn = 3600) { return getSignedUrl(this.client, new PutObjectCommand({ Bucket: this.config.bucket, Key: key, ContentType: contentType }), { expiresIn }); }
+  async setCors(allowedOrigins: string[]) { await this.client.send(new PutBucketCorsCommand({ Bucket: this.config.bucket, CORSConfiguration: { CORSRules: [{ AllowedOrigins: allowedOrigins, AllowedMethods: ['GET', 'PUT', 'HEAD'], AllowedHeaders: ['*'], ExposeHeaders: ['ETag'], MaxAgeSeconds: 86400 }] } })); }
   async deletePrefix(prefix: string) {
     let token: string | undefined;
     do {
