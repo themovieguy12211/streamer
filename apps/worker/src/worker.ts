@@ -18,7 +18,7 @@ const storage = new B2StorageProvider({ endpoint: env.B2_ENDPOINT, region: env.B
 const run = (command: string, args: string[], onProgress?: (line: string) => void) => new Promise<void>((resolve, reject) => { const process = spawn(command, args); process.stderr.on('data', (chunk) => onProgress?.(chunk.toString())); process.on('error', reject); process.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with ${code}`))); });
 
 const worker = new Worker('video.encode', async (job) => {
-  const { videoId, sourceKey, sourceUrl, sourcePath } = z.object({ videoId: z.string(), sourceKey: z.string().optional(), sourceUrl: z.string().url().optional(), sourcePath: z.string().optional() }).refine((d) => d.sourceKey ?? d.sourceUrl ?? d.sourcePath, 'Either sourceKey, sourceUrl or sourcePath is required').parse(job.data);
+  const { videoId, sourceKey, sourceUrl, sourcePath, fileHash } = z.object({ videoId: z.string(), sourceKey: z.string().optional(), sourceUrl: z.string().url().optional(), sourcePath: z.string().optional(), fileHash: z.string().optional() }).refine((d) => d.sourceKey ?? d.sourceUrl ?? d.sourcePath, 'Either sourceKey, sourceUrl or sourcePath is required').parse(job.data);
   const directory = await mkdtemp(join(tmpdir(), `streaming-${videoId}-`));
   const source = join(directory, 'source');
   try {
@@ -52,7 +52,7 @@ const worker = new Worker('video.encode', async (job) => {
     if (sourceKey) { try { await storage.delete(sourceKey); } catch { /* best-effort cleanup */ } }
     const { error: e5 } = await supabase.from('video_renditions').insert(renditions.map((r) => ({ id: nanoid(), video_id: videoId, height: r.height, bandwidth: r.bandwidth, playlist_key: `video/${videoId}/${r.name}/playlist.m3u8`, codec: 'h264' })));
     if (e5) throw e5;
-    const { error: e6 } = await supabase.from('videos').update({ status: 'READY', encoding_progress: 100, encoding_stage: 'complete', hls_master_key: `video/${videoId}/master.m3u8`, thumbnail_key: `video/${videoId}/thumbnail.jpg` }).eq('id', videoId);
+    const { error: e6 } = await supabase.from('videos').update({ status: 'READY', encoding_progress: 100, encoding_stage: 'complete', hls_master_key: `video/${videoId}/master.m3u8`, thumbnail_key: `video/${videoId}/thumbnail.jpg`, ...(fileHash ? { file_hash: fileHash } : {}) }).eq('id', videoId);
     if (e6) throw e6;
     const { error: e7 } = await supabase.from('encoding_jobs').update({ state: 'COMPLETED', progress: 100, stage: 'complete' }).eq('bull_job_id', String(job.id));
     if (e7) throw e7;

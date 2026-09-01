@@ -4,9 +4,11 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
-import { createWriteStream } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createWriteStream, promises as fsApi } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Queue } from 'bullmq';
 import { nanoid } from 'nanoid';
@@ -261,10 +263,21 @@ app.post('/api/v1/videos/:id/upload', async (request) => {
   const data = await request.file();
   if (!data) throw app.httpErrors.badRequest('No file provided');
   const tempPath = join(tmpdir(), `streaming-src-${id}-${nanoid()}`);
-  await pipeline(data.file, createWriteStream(tempPath));
-  const { error: vidErr } = await supabase.from('videos').update({ status: 'QUEUED', encoding_progress: 0, encoding_stage: 'queued' }).eq('id', id);
+  const hash = createHash('sha256');
+  const hashTransform = new Transform({ transform(chunk, _enc, cb) { hash.update(chunk); this.push(chunk); cb(); } });
+  await pipeline(data.file, hashTransform, createWriteStream(tempPath));
+  const fileHash = hash.digest('hex');
+  // Deduplication: check if identical content is already encoded
+  const { data: existing } = await supabase.from('videos').select('hls_master_key, thumbnail_key, duration_seconds').eq('file_hash', fileHash).eq('status', 'READY').not('hls_master_key', 'is', null).limit(1);
+  if (existing?.[0]) {
+    const { hls_master_key, thumbnail_key, duration_seconds } = existing[0];
+    await supabase.from('videos').update({ status: 'READY', encoding_progress: 100, encoding_stage: 'deduplicated', hls_master_key, thumbnail_key, duration_seconds, file_hash: fileHash }).eq('id', id);
+    await fsApi.rm(tempPath, { force: true });
+    return { jobId: null, status: 'READY', deduplicated: true };
+  }
+  const { error: vidErr } = await supabase.from('videos').update({ status: 'QUEUED', encoding_progress: 0, encoding_stage: 'queued', file_hash: fileHash }).eq('id', id);
   if (vidErr) throw vidErr;
-  const job = await queue.add('video.encode', { videoId: id, sourcePath: tempPath }, { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: 100, removeOnFail: 500 });
+  const job = await queue.add('video.encode', { videoId: id, sourcePath: tempPath, fileHash }, { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: 100, removeOnFail: 500 });
   const { error: jobErr } = await supabase.from('encoding_jobs').insert({ id: nanoid(), video_id: id, bull_job_id: String(job.id), state: 'QUEUED', stage: 'queued' });
   if (jobErr) throw jobErr;
   return { jobId: job.id, status: 'QUEUED' };

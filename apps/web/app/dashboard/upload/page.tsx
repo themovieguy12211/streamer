@@ -99,10 +99,15 @@ export default function UploadPage() {
         if (!uploadFile) throw new Error('Please select a video file.');
         setState('uploading');
         setUploadProgress(0);
-        await uploadWithProgress(`/api/v1/videos/${vid}/upload`, uploadFile, setUploadProgress);
-        setState('encoding');
-        setEncodeStatus({ status: 'QUEUED', progress: 0, stage: 'queued', error: null });
-        setMessage('Upload complete. Encoding in progress...');
+        const result = await uploadWithProgress(`/api/v1/videos/${vid}/upload`, uploadFile, setUploadProgress);
+        if (result.deduplicated) {
+          setState('ready');
+          setMessage('Your video is ready!');
+        } else {
+          setState('encoding');
+          setEncodeStatus({ status: 'QUEUED', progress: 0, stage: 'queued', error: null });
+          setMessage('Upload complete. Encoding in progress...');
+        }
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Something went wrong.');
@@ -168,29 +173,36 @@ export default function UploadPage() {
           <form onSubmit={handleSubmit} className="authForm">
             <label>
               Video title
-              <input required value={title} onChange={e => setTitle(e.target.value)} placeholder="My video title" disabled={isBusy} />
+              <input required value={title} onChange={e => setTitle(e.target.value)} placeholder="Auto-filled from filename" disabled={isBusy} />
             </label>
-            <label>
-              TMDb ID <span style={{ fontWeight: 400, color: 'var(--text2)', fontSize: '12px' }}>optional — links your video to a movie/show</span>
-              <input inputMode="numeric" value={tmdbId} onChange={e => setTmdbId(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 155" disabled={isBusy} />
+
+            <label className="toggle" style={{ display: 'flex', alignItems: 'center', gap: '10px', flexDirection: 'row' }}>
+              <input type="checkbox" checked={isEpisode} onChange={e => setIsEpisode(e.target.checked)} disabled={isBusy} style={{ width: '17px', height: '17px', accentColor: 'var(--accent)' }} />
+              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>This is a TV episode</span>
             </label>
-            {tmdbId && (
-              <label className="toggle" style={{ gridColumn: '1', gap: '10px', display: 'flex', alignItems: 'center', flexDirection: 'row' }}>
-                <input type="checkbox" checked={isEpisode} onChange={e => setIsEpisode(e.target.checked)} disabled={isBusy} style={{ width: '17px', height: '17px', accentColor: 'var(--accent)' }} />
-                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>This is a TV episode</span>
-              </label>
-            )}
-            {tmdbId && isEpisode && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+
+            {isEpisode && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                 <label style={{ display: 'grid', gap: '7px', fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
                   Season
                   <input inputMode="numeric" value={seasonNumber} onChange={e => setSeasonNumber(e.target.value.replace(/\D/g, ''))} placeholder="1" disabled={isBusy} />
                 </label>
                 <label style={{ display: 'grid', gap: '7px', fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
                   Episode
-                  <input required inputMode="numeric" value={episodeNumber} onChange={e => setEpisodeNumber(e.target.value.replace(/\D/g, ''))} placeholder="1" disabled={isBusy} />
+                  <input required={isEpisode} inputMode="numeric" value={episodeNumber} onChange={e => setEpisodeNumber(e.target.value.replace(/\D/g, ''))} placeholder="1" disabled={isBusy} />
+                </label>
+                <label style={{ display: 'grid', gap: '7px', fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
+                  TMDb ID <span style={{ fontWeight: 400, color: 'var(--text2)' }}>optional</span>
+                  <input inputMode="numeric" value={tmdbId} onChange={e => setTmdbId(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 60625" disabled={isBusy} />
                 </label>
               </div>
+            )}
+
+            {!isEpisode && (
+              <label>
+                TMDb ID <span style={{ fontWeight: 400, color: 'var(--text2)', fontSize: '12px' }}>optional</span>
+                <input inputMode="numeric" value={tmdbId} onChange={e => setTmdbId(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 155" disabled={isBusy} />
+              </label>
             )}
 
             <div>
@@ -221,7 +233,19 @@ export default function UploadPage() {
                     type="file"
                     accept="video/*"
                     disabled={isBusy}
-                    onChange={e => setUploadFile(e.target.files?.[0] ?? null)}
+                    onChange={e => {
+                      const file = e.target.files?.[0] ?? null;
+                      setUploadFile(file);
+                      if (file && !title) {
+                        const clean = file.name
+                          .replace(/\.[^.]+$/, '')
+                          .replace(/[._\-]+/g, ' ')
+                          .replace(/\b(720p|1080p|2160p|4k|bluray|webrip|web|hdtv|x264|x265|h264|h265|aac|hevc|mkv|mp4|avi|remux|hdrip)\b/gi, '')
+                          .replace(/\s+/g, ' ').trim()
+                          .replace(/\b\w/g, c => c.toUpperCase());
+                        setTitle(clean);
+                      }
+                    }}
                     style={{ border: '1px solid #bac5bd', borderRadius: '4px', padding: '10px 12px', background: 'white', font: '400 14px inherit' }}
                   />
                 </label>
