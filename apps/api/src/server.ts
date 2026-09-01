@@ -95,15 +95,15 @@ app.get('/api/v1/videos/:id', async (request) => {
   const history = histData?.map(r => toCamel<any>(r))[0];
   const rawHlsUrl = video.externalHlsUrl ?? (video.hlsMasterKey && env.B2_PUBLIC_BASE_URL ? `${env.B2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${video.hlsMasterKey}` : null);
   const adConfiguration = await ads.getConfiguration({ videoId: id, isPremium: Boolean(user?.isPremium) });
-  return { video, streamUrl: rawHlsUrl, hlsUrl: user?.role === 'ADMIN' ? rawHlsUrl : null, resumePositionSeconds: history?.positionSeconds ?? 0, ads: adConfiguration };
+  return { video, streamUrl: rawHlsUrl, hlsUrl: (user?.role === 'ADMIN' || user?.isPremium) ? rawHlsUrl : null, resumePositionSeconds: history?.positionSeconds ?? 0, ads: adConfiguration };
 });
 
 app.post('/api/v1/videos', async (request, reply) => {
   const user = await requireUser(request);
-  const body = z.object({ title: z.string().min(1).max(255), slug: z.string().min(1).max(280).regex(/^[a-z0-9-]+$/).optional() }).parse(request.body);
+  const body = z.object({ title: z.string().min(1).max(255), slug: z.string().min(1).max(280).regex(/^[a-z0-9-]+$/).optional(), tmdbId: z.number().int().positive().optional() }).parse(request.body);
   const id = nanoid();
   const slug = body.slug ?? `${body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${nanoid(6)}`;
-  const { error } = await supabase.from('videos').insert({ id, title: body.title, slug, status: 'DRAFT', owner_id: user.id });
+  const { error } = await supabase.from('videos').insert({ id, title: body.title, slug, status: 'DRAFT', owner_id: user.id, tmdb_id: body.tmdbId ?? null });
   if (error) throw error;
   reply.code(201).send({ video: { id, title: body.title, slug, status: 'DRAFT' } });
 });
@@ -321,6 +321,15 @@ app.get('/api/v1/admin/videos', async (request) => {
   const { data, error, count } = await supabase.from('videos').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(offset, offset + query.limit - 1);
   if (error) throw error;
   return { data: (data ?? []).map(r => toCamel<any>(r)), total: count ?? 0, page: query.page };
+});
+app.get('/api/v1/tmdb/:tmdbId/videos', async (request) => {
+  await requireAdmin(request);
+  const { tmdbId } = z.object({ tmdbId: z.coerce.number().int().positive() }).parse(request.params);
+  const { data, error } = await supabase.from('videos').select('*').eq('tmdb_id', tmdbId).order('created_at', { ascending: false });
+  if (error) throw error;
+  const rows = (data ?? []).map(r => toCamel<any>(r));
+  const rawUrls = rows.map(v => v.externalHlsUrl ?? (v.hlsMasterKey && env.B2_PUBLIC_BASE_URL ? `${env.B2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${v.hlsMasterKey}` : null));
+  return { data: rows.map((v, i) => ({ ...v, hlsUrl: rawUrls[i], embedUrl: `${env.NEXT_PUBLIC_APP_URL ?? ''}/e/${v.id}` })) };
 });
 app.get('/api/v1/admin/stats', async (request) => {
   await requireAdmin(request);

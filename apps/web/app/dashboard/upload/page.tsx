@@ -19,6 +19,7 @@ function uploadWithProgress(url: string, file: File, onProgress: (pct: number) =
 
 export default function UploadPage() {
   const [title, setTitle] = useState('');
+  const [tmdbId, setTmdbId] = useState('');
   const [sourceMode, setSourceMode] = useState<SourceMode>('upload-file');
   const [importUrl, setImportUrl] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -61,7 +62,7 @@ export default function UploadPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: title.trim() }),
+        body: JSON.stringify({ title: title.trim(), ...(tmdbId.trim() ? { tmdbId: parseInt(tmdbId) } : {}) }),
       });
       if (!createResp.ok) {
         const b = await createResp.json().catch(() => null);
@@ -173,13 +174,11 @@ export default function UploadPage() {
           <form onSubmit={handleSubmit} className="authForm">
             <label>
               Video title
-              <input
-                required
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                placeholder="My video title"
-                disabled={isBusy}
-              />
+              <input required value={title} onChange={e => setTitle(e.target.value)} placeholder="My video title" disabled={isBusy} />
+            </label>
+            <label>
+              TMDb ID <span style={{ fontWeight: 400, color: 'var(--text2)', fontSize: '12px' }}>optional — links your video to a movie/show</span>
+              <input inputMode="numeric" value={tmdbId} onChange={e => setTmdbId(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 155" disabled={isBusy} />
             </label>
 
             <div>
