@@ -395,16 +395,18 @@ app.patch('/api/v1/my-videos/:id', async (request) => {
 app.delete('/api/v1/my-videos/:id', async (request, reply) => {
   const user = await requireUser(request);
   const { id } = z.object({ id: z.string() }).parse(request.params);
-  const { data: check } = await supabase.from('videos').select('owner_id').eq('id', id).limit(1);
+  const { data: check } = await supabase.from('videos').select('owner_id, hls_master_key').eq('id', id).limit(1);
   if (!check?.[0] || check[0].owner_id !== user.id) throw app.httpErrors.forbidden('Not your video');
   const { error } = await supabase.from('videos').delete().eq('id', id);
   if (error) throw error;
+  if (check[0].hls_master_key) storage.deletePrefix(`video/${id}/`).catch(() => {});
   reply.code(204).send();
 });
 
 app.post('/api/v1/videos/:id/view', async (request) => {
   const { id } = z.object({ id: z.string() }).parse(request.params);
   await supabase.rpc('increment_view_count', { p_video_id: id });
+  await supabase.from('videos').update({ last_viewed_at: new Date().toISOString() }).eq('id', id);
   return { ok: true };
 });
 

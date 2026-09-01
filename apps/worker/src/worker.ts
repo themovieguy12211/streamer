@@ -65,5 +65,25 @@ const worker = new Worker('video.encode', async (job) => {
 worker.on('failed', (job, error) => console.error(`Encoding job ${job?.id} failed:`, error.message));
 worker.on('ready', () => console.log(`Encoding worker ready (concurrency ${env.WORKER_CONCURRENCY})`));
 
+const INACTIVITY_DAYS = 60;
+async function runInactivityCleanup() {
+  const cutoff = new Date(Date.now() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const { data: stale } = await supabase
+    .from('videos')
+    .select('id, hls_master_key')
+    .not('owner_id', 'is', null)
+    .or(`last_viewed_at.lt.${cutoff},and(last_viewed_at.is.null,created_at.lt.${cutoff})`);
+  if (!stale?.length) return;
+  for (const video of stale) {
+    if (video.hls_master_key) await storage.deletePrefix(`video/${video.id}/`).catch(() => {});
+    await supabase.from('videos').delete().eq('id', video.id);
+  }
+  console.log(`Inactivity cleanup: removed ${stale.length} videos inactive for ${INACTIVITY_DAYS}+ days`);
+}
+(function scheduleCleanup() {
+  runInactivityCleanup().catch(err => console.error('Cleanup error:', err));
+  setTimeout(scheduleCleanup, 24 * 60 * 60 * 1000);
+})();
+
 async function walk(directory: string): Promise<string[]> { const entries = await readdir(directory, { withFileTypes: true }); return (await Promise.all(entries.map((entry) => entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)]))).flat(); }
 function contentType(file: string) { if (file.endsWith('.m3u8')) return 'application/vnd.apple.mpegurl'; if (file.endsWith('.ts')) return 'video/mp2t'; if (file.endsWith('.jpg')) return 'image/jpeg'; return 'application/octet-stream'; }

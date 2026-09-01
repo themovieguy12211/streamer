@@ -1,7 +1,5 @@
 export const renditions = [
   { name: '1080p', height: 1080, bandwidth: 5_000_000 },
-  { name: '720p', height: 720, bandwidth: 2_800_000 },
-  { name: '480p', height: 480, bandwidth: 1_400_000 },
 ] as const;
 
 export function masterPlaylist(videoId: string) {

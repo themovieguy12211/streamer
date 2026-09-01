@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Readable } from 'node:stream';
 
@@ -13,4 +13,13 @@ export class B2StorageProvider implements StorageProvider {
   async getSignedUrl(key: string, expiresIn = 900) { return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.config.bucket, Key: key }), { expiresIn }); }
   async getObjectMetadata(key: string) { const result = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: key })); return { contentLength: result.ContentLength, contentType: result.ContentType }; }
   uploadUrl(key: string, contentType: string, expiresIn = 3600) { return getSignedUrl(this.client, new PutObjectCommand({ Bucket: this.config.bucket, Key: key, ContentType: contentType }), { expiresIn }); }
+  async deletePrefix(prefix: string) {
+    let token: string | undefined;
+    do {
+      const list = await this.client.send(new ListObjectsV2Command({ Bucket: this.config.bucket, Prefix: prefix, ContinuationToken: token }));
+      const keys = (list.Contents ?? []).map(o => ({ Key: o.Key! }));
+      if (keys.length) await this.client.send(new DeleteObjectsCommand({ Bucket: this.config.bucket, Delete: { Objects: keys, Quiet: true } }));
+      token = list.IsTruncated ? list.NextContinuationToken : undefined;
+    } while (token);
+  }
 }
