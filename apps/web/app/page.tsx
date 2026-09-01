@@ -25,7 +25,7 @@ export default async function Home() {
 
   return (
     <>
-      <header className="shell nav">
+      <header className="nav">
         <Link className="brand" href="/">Northstar</Link>
         <nav className="navlinks">
           <Link href="/">Discover</Link>
@@ -35,7 +35,9 @@ export default async function Home() {
         {user ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {!isAdmin && <Link className="button" href="/dashboard/upload">Upload</Link>}
-            <Link href="/dashboard" style={{ fontSize: '14px', color: 'var(--ink)', fontWeight: 600 }}>{user.displayName}</Link>
+            <Link href="/dashboard" style={{ fontSize: '14px', color: 'var(--text)', fontWeight: 600 }}>
+              {user.displayName}
+            </Link>
           </div>
         ) : (
           <Link className="button" href="/login">Sign in</Link>
@@ -44,10 +46,29 @@ export default async function Home() {
       <main>
         <section className="hero">
           <div className="shell">
-            <span className="eyebrow">Featured</span>
-            <h1>Long stories, given room to breathe.</h1>
-            <p>Watch thoughtful films, performances, and true stories without a rush.</p>
-            <Link className="button" href={videos[0] ? `/watch/${videos[0].id}` : '#catalogue'}>Watch now</Link>
+            <span className="eyebrow">Video Hosting Platform</span>
+            <h1>Upload. Share. Earn.</h1>
+            <p>Host your videos, reach a global audience, and monetize your content — all in one place.</p>
+            <div className="heroButtons">
+              {user ? (
+                <Link className="button" href="/dashboard/upload">Upload a video</Link>
+              ) : (
+                <>
+                  <Link className="button" href="/register">Get started free</Link>
+                  <Link
+                    className="button"
+                    href={videos[0] ? `/watch/${videos[0].id}` : '#catalogue'}
+                    style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)' }}
+                  >
+                    Browse videos
+                  </Link>
+                </>
+              )}
+            </div>
+            <div className="heroStats">
+              <div>Join <span>thousands</span> of uploaders</div>
+              {videos.length > 0 && <div><span>{videos.length}+</span> videos hosted</div>}
+            </div>
           </div>
         </section>
         <div id="catalogue" className="shell content">
@@ -60,4 +81,12 @@ export default async function Home() {
   );
 }
 
-export type Video = { id: string; title: string; description: string | null; thumbnailKey: string | null; durationSeconds: number | null; releaseDate: string | null };
+export type Video = {
+  id: string;
+  title: string;
+  description: string | null;
+  thumbnailKey: string | null;
+  durationSeconds: number | null;
+  releaseDate: string | null;
+  viewCount: number | null;
+};

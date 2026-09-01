@@ -402,4 +402,65 @@ app.delete('/api/v1/my-videos/:id', async (request, reply) => {
   reply.code(204).send();
 });
 
+app.post('/api/v1/videos/:id/view', async (request) => {
+  const { id } = z.object({ id: z.string() }).parse(request.params);
+  await supabase.rpc('increment_view_count', { p_video_id: id });
+  return { ok: true };
+});
+
+app.post('/api/v1/ad-events', async (request) => {
+  const body = z.object({ videoId: z.string(), eventType: z.enum(['REQUEST', 'IMPRESSION', 'START', 'COMPLETE', 'ERROR']), adDurationSeconds: z.number().int().positive().optional() }).parse(request.body);
+  const user = await getCurrentUser(request);
+  const revenueMicros = body.eventType === 'COMPLETE' ? Math.round((env.CPM_RATE / 1000) * env.REVENUE_SHARE * 1_000_000) : 0;
+  const { error } = await supabase.from('ad_events').insert({ id: nanoid(), video_id: body.videoId, user_id: user?.id ?? null, event_type: body.eventType, ad_duration_seconds: body.adDurationSeconds ?? null, revenue_micros: revenueMicros });
+  if (error) throw error;
+  return { ok: true };
+});
+
+app.get('/api/v1/earnings', async (request) => {
+  const user = await requireUser(request);
+  const { data: myVideos, error: vErr } = await supabase.from('videos').select('id, view_count, title').eq('owner_id', user.id);
+  if (vErr) throw vErr;
+  const videoIds = (myVideos ?? []).map((v: any) => v.id);
+  const totalViews = (myVideos ?? []).reduce((sum: number, v: any) => sum + (v.view_count ?? 0), 0);
+  let revenueMicros = 0;
+  if (videoIds.length > 0) {
+    const { data: adData, error: adErr } = await supabase.from('ad_events').select('revenue_micros').in('video_id', videoIds).eq('event_type', 'COMPLETE');
+    if (adErr) throw adErr;
+    revenueMicros = (adData ?? []).reduce((sum: number, e: any) => sum + (e.revenue_micros ?? 0), 0);
+  }
+  const { data: pendingWd, error: wdErr } = await supabase.from('withdrawal_requests').select('amount_micros').eq('user_id', user.id).in('status', ['PENDING', 'APPROVED']);
+  if (wdErr) throw wdErr;
+  const pendingMicros = (pendingWd ?? []).reduce((sum: number, w: any) => sum + (w.amount_micros ?? 0), 0);
+  const balanceMicros = revenueMicros - pendingMicros;
+  return { totalViews, revenueMicros, balanceMicros, balanceUsd: (balanceMicros / 1_000_000).toFixed(4), revenueUsd: (revenueMicros / 1_000_000).toFixed(4), cpmRate: env.CPM_RATE, revenueShare: env.REVENUE_SHARE, videoBreakdown: (myVideos ?? []).map((v: any) => ({ id: v.id, title: v.title, views: v.view_count ?? 0, estimatedUsd: ((v.view_count ?? 0) / 1000 * env.CPM_RATE * env.REVENUE_SHARE).toFixed(4) })) };
+});
+
+app.post('/api/v1/withdrawals', async (request) => {
+  const user = await requireUser(request);
+  const body = z.object({ amountUsd: z.number().positive().min(5), method: z.string().min(1).max(64), address: z.string().min(1).max(512) }).parse(request.body);
+  const { error } = await supabase.from('withdrawal_requests').insert({ id: nanoid(), user_id: user.id, amount_micros: Math.round(body.amountUsd * 1_000_000), method: body.method, address: body.address, status: 'PENDING' });
+  if (error) throw error;
+  return { ok: true };
+});
+
+app.get('/api/v1/admin/withdrawals', async (request) => {
+  await requireAdmin(request);
+  const { data, error } = await supabase.from('withdrawal_requests').select('*').order('created_at', { ascending: false });
+  if (error) throw error;
+  const userIds = [...new Set((data ?? []).map((r: any) => r.user_id))];
+  const { data: users } = userIds.length ? await supabase.from('users').select('id, username, email, display_name').in('id', userIds) : { data: [] };
+  const userMap: Record<string, any> = Object.fromEntries((users ?? []).map((u: any) => [u.id, u]));
+  return { data: (data ?? []).map((r: any) => ({ ...toCamel<any>(r), user: userMap[r.user_id] ? toCamel<any>(userMap[r.user_id]) : null })) };
+});
+
+app.patch('/api/v1/admin/withdrawals/:id', async (request) => {
+  await requireAdmin(request);
+  const { id } = z.object({ id: z.string() }).parse(request.params);
+  const body = z.object({ status: z.enum(['APPROVED', 'REJECTED', 'PAID']), note: z.string().max(500).optional() }).parse(request.body);
+  const { error } = await supabase.from('withdrawal_requests').update({ status: body.status, note: body.note ?? null, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+  return { ok: true };
+});
+
 await app.listen({ port: env.API_PORT, host: '0.0.0.0' });
