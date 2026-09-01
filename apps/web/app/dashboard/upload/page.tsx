@@ -20,6 +20,9 @@ function uploadWithProgress(url: string, file: File, onProgress: (pct: number) =
 export default function UploadPage() {
   const [title, setTitle] = useState('');
   const [tmdbId, setTmdbId] = useState('');
+  const [isEpisode, setIsEpisode] = useState(false);
+  const [seasonNumber, setSeasonNumber] = useState('');
+  const [episodeNumber, setEpisodeNumber] = useState('');
   const [sourceMode, setSourceMode] = useState<SourceMode>('upload-file');
   const [importUrl, setImportUrl] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -62,7 +65,11 @@ export default function UploadPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), ...(tmdbId.trim() ? { tmdbId: parseInt(tmdbId) } : {}) }),
+        body: JSON.stringify({
+        title: title.trim(),
+        ...(tmdbId.trim() ? { tmdbId: parseInt(tmdbId) } : {}),
+        ...(isEpisode && episodeNumber ? { contentType: 'EPISODE', episodeNumber: parseInt(episodeNumber), ...(seasonNumber ? { seasonNumber: parseInt(seasonNumber) } : {}) } : {}),
+      }),
       });
       if (!createResp.ok) {
         const b = await createResp.json().catch(() => null);
@@ -180,6 +187,24 @@ export default function UploadPage() {
               TMDb ID <span style={{ fontWeight: 400, color: 'var(--text2)', fontSize: '12px' }}>optional — links your video to a movie/show</span>
               <input inputMode="numeric" value={tmdbId} onChange={e => setTmdbId(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 155" disabled={isBusy} />
             </label>
+            {tmdbId && (
+              <label className="toggle" style={{ gridColumn: '1', gap: '10px', display: 'flex', alignItems: 'center', flexDirection: 'row' }}>
+                <input type="checkbox" checked={isEpisode} onChange={e => setIsEpisode(e.target.checked)} disabled={isBusy} style={{ width: '17px', height: '17px', accentColor: 'var(--accent)' }} />
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>This is a TV episode</span>
+              </label>
+            )}
+            {tmdbId && isEpisode && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <label style={{ display: 'grid', gap: '7px', fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
+                  Season
+                  <input inputMode="numeric" value={seasonNumber} onChange={e => setSeasonNumber(e.target.value.replace(/\D/g, ''))} placeholder="1" disabled={isBusy} />
+                </label>
+                <label style={{ display: 'grid', gap: '7px', fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
+                  Episode
+                  <input required inputMode="numeric" value={episodeNumber} onChange={e => setEpisodeNumber(e.target.value.replace(/\D/g, ''))} placeholder="1" disabled={isBusy} />
+                </label>
+              </div>
+            )}
 
             <div>
               <div className="sourceTabs" style={{ marginBottom: '14px' }}>

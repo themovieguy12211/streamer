@@ -100,10 +100,10 @@ app.get('/api/v1/videos/:id', async (request) => {
 
 app.post('/api/v1/videos', async (request, reply) => {
   const user = await requireUser(request);
-  const body = z.object({ title: z.string().min(1).max(255), slug: z.string().min(1).max(280).regex(/^[a-z0-9-]+$/).optional(), tmdbId: z.number().int().positive().optional() }).parse(request.body);
+  const body = z.object({ title: z.string().min(1).max(255), slug: z.string().min(1).max(280).regex(/^[a-z0-9-]+$/).optional(), tmdbId: z.number().int().positive().optional(), contentType: z.enum(['MOVIE', 'EPISODE']).default('MOVIE'), episodeNumber: z.number().int().positive().optional(), seasonNumber: z.number().int().positive().optional() }).parse(request.body);
   const id = nanoid();
   const slug = body.slug ?? `${body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${nanoid(6)}`;
-  const { error } = await supabase.from('videos').insert({ id, title: body.title, slug, status: 'DRAFT', owner_id: user.id, tmdb_id: body.tmdbId ?? null });
+  const { error } = await supabase.from('videos').insert({ id, title: body.title, slug, status: 'DRAFT', owner_id: user.id, tmdb_id: body.tmdbId ?? null, content_type: body.contentType, episode_number: body.episodeNumber ?? null });
   if (error) throw error;
   reply.code(201).send({ video: { id, title: body.title, slug, status: 'DRAFT' } });
 });
