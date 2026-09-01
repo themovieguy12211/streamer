@@ -1,6 +1,8 @@
 import { cookies } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { Player } from '../../ui/player';
+import { EmbedCode } from '../../ui/embed-code';
+
 export default async function Watch({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const api = process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
@@ -9,6 +11,7 @@ export default async function Watch({ params }: { params: Promise<{ id: string }
   const response = await fetch(`${api}/videos/${id}`, { cache: 'no-store', headers: cookieHeader ? { Cookie: cookieHeader } : {} });
   if (!response.ok) notFound();
   const { video, streamUrl, hlsUrl, resumePositionSeconds, ads } = await response.json();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
   return (
     <>
       <header className="shell nav"><a className="brand" href="/">Northstar</a><span className="muted">Watch</span></header>
@@ -26,6 +29,7 @@ export default async function Watch({ params }: { params: Promise<{ id: string }
             <button className="button">Add to my list</button>
           </aside>
         </div>
+        {streamUrl && <EmbedCode videoId={id} appUrl={appUrl} title={video.title} />}
         {hlsUrl && (
           <div className="adminBar">
             <span className="eyebrow">Admin — Direct stream URL</span>

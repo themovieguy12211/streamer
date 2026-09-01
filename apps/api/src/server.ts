@@ -36,6 +36,7 @@ app.get('/health', async () => ({ ok: true }));
 
 const requireUser = async (request: typeof app extends never ? never : any) => { const user = await getCurrentUser(request); if (!user) throw app.httpErrors.unauthorized('Authentication required'); return user; };
 const requireAdmin = async (request: any) => { const user = await requireUser(request); if (user.role !== 'ADMIN') throw app.httpErrors.forbidden('Admin role required'); return user; };
+const requireVideoOwner = async (request: any, videoId: string) => { const user = await requireUser(request); if (user.role === 'ADMIN') return user; const { data } = await supabase.from('videos').select('owner_id').eq('id', videoId).limit(1); if (!data?.[0] || data[0].owner_id !== user.id) throw app.httpErrors.forbidden('Not your video'); return user; };
 
 app.post('/api/v1/auth/register', async (request, reply) => {
   const body = z.object({ email: z.string().email(), username: z.string().min(3).max(64).regex(/^[a-zA-Z0-9_]+$/), password: z.string().min(12).max(128), displayName: z.string().min(1).max(100) }).parse(request.body);
@@ -80,8 +81,15 @@ app.get('/api/v1/videos/:id', async (request) => {
   const { data: videoData, error: videoErr } = await supabase.from('videos').select('*').eq('id', id).limit(1);
   if (videoErr) throw videoErr;
   const video = videoData?.map(r => toCamel<any>(r))[0];
-  if (!video || video.status !== 'PUBLISHED' || video.visibility !== 'PUBLIC') throw app.httpErrors.notFound('Video not found');
+  if (!video) throw app.httpErrors.notFound('Video not found');
   const user = await getCurrentUser(request);
+  const isOwner = user?.id && video.ownerId === user.id;
+  const isAdmin = user?.role === 'ADMIN';
+  const isPubliclyWatchable = video.status === 'PUBLISHED' && video.visibility === 'PUBLIC';
+  const isDirectLinkWatchable = video.status === 'READY';
+  if (!isPubliclyWatchable && !isDirectLinkWatchable && !isOwner && !isAdmin) {
+    throw app.httpErrors.notFound('Video not found');
+  }
   const { data: histData, error: histErr } = user ? await supabase.from('watch_history').select('*').eq('user_id', user.id).eq('video_id', id).limit(1) : { data: [] as any[], error: null };
   if (histErr) throw histErr;
   const history = histData?.map(r => toCamel<any>(r))[0];
@@ -91,12 +99,13 @@ app.get('/api/v1/videos/:id', async (request) => {
 });
 
 app.post('/api/v1/videos', async (request, reply) => {
-  await requireAdmin(request);
-  const body = z.object({ title: z.string().min(1).max(255), slug: z.string().min(1).max(280).regex(/^[a-z0-9-]+$/), description: z.string().max(10000).optional(), contentType: z.enum(['MOVIE', 'EPISODE']).default('MOVIE'), seasonId: z.string().optional(), episodeNumber: z.number().int().positive().optional(), tmdbId: z.number().int().positive().optional() }).refine((value) => value.contentType === 'MOVIE' || (value.seasonId && value.episodeNumber), 'Episodes require seasonId and episodeNumber').parse(request.body);
+  const user = await requireUser(request);
+  const body = z.object({ title: z.string().min(1).max(255), slug: z.string().min(1).max(280).regex(/^[a-z0-9-]+$/).optional() }).parse(request.body);
   const id = nanoid();
-  const { error } = await supabase.from('videos').insert({ id, title: body.title, slug: body.slug, description: body.description, content_type: body.contentType, season_id: body.seasonId, episode_number: body.episodeNumber, tmdb_id: body.tmdbId, status: 'DRAFT' });
+  const slug = body.slug ?? `${body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${nanoid(6)}`;
+  const { error } = await supabase.from('videos').insert({ id, title: body.title, slug, status: 'DRAFT', owner_id: user.id });
   if (error) throw error;
-  reply.code(201).send({ video: { id, ...body, status: 'DRAFT' } });
+  reply.code(201).send({ video: { id, title: body.title, slug, status: 'DRAFT' } });
 });
 
 app.post('/api/v1/videos/:id/external-hls', async (request) => {
@@ -241,8 +250,8 @@ app.put('/api/v1/admin/content/:tmdbId/:seasonNumber/:episodeNumber', async (req
 app.get('/api/v1/ads/config/:videoId', async (request) => { const { videoId } = z.object({ videoId: z.string() }).parse(request.params); const user = await getCurrentUser(request); return ads.getConfiguration({ videoId, isPremium: Boolean(user?.isPremium) }); });
 
 app.post('/api/v1/videos/:id/upload', async (request) => {
-  await requireAdmin(request);
   const { id } = z.object({ id: z.string() }).parse(request.params);
+  await requireVideoOwner(request, id);
   const body = z.object({ fileName: z.string().min(1).max(255), contentType: z.string().regex(/^video\//), sizeBytes: z.number().int().positive().max(env.MAX_UPLOAD_BYTES) }).parse(request.body);
   const key = `sources/${id}/${nanoid()}-${body.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
   const uploadUrl = await storage.uploadUrl(key, body.contentType);
@@ -252,8 +261,8 @@ app.post('/api/v1/videos/:id/upload', async (request) => {
 });
 
 app.post('/api/v1/videos/:id/upload/complete', async (request) => {
-  await requireAdmin(request);
   const { id } = z.object({ id: z.string() }).parse(request.params);
+  await requireVideoOwner(request, id);
   const body = z.object({ key: z.string().startsWith(`sources/${id}/`), fileName: z.string(), contentType: z.string().regex(/^video\//), sizeBytes: z.number().int().positive() }).parse(request.body);
   const metadata = await storage.getObjectMetadata(body.key);
   if (!metadata.contentLength || metadata.contentLength > env.MAX_UPLOAD_BYTES) throw app.httpErrors.badRequest('Invalid uploaded object');
@@ -269,8 +278,8 @@ app.post('/api/v1/videos/:id/upload/complete', async (request) => {
 });
 
 app.post('/api/v1/videos/:id/import-url', async (request) => {
-  await requireAdmin(request);
   const { id } = z.object({ id: z.string() }).parse(request.params);
+  await requireVideoOwner(request, id);
   const body = z.object({ url: z.string().url().max(2048) }).parse(request.body);
   const { data: videoCheck, error: vidCheckErr } = await supabase.from('videos').select('id').eq('id', id).limit(1);
   if (vidCheckErr) throw vidCheckErr;
@@ -284,8 +293,8 @@ app.post('/api/v1/videos/:id/import-url', async (request) => {
 });
 
 app.get('/api/v1/videos/:id/status', async (request) => {
-  await requireAdmin(request);
   const { id } = z.object({ id: z.string() }).parse(request.params);
+  await requireVideoOwner(request, id);
   const { data, error } = await supabase.from('videos').select('status, encoding_progress, encoding_stage, encoding_error').eq('id', id).limit(1);
   if (error) throw error;
   if (!data?.length) throw app.httpErrors.notFound();
@@ -293,6 +302,36 @@ app.get('/api/v1/videos/:id/status', async (request) => {
   return { status: row.status, progress: row.encoding_progress, stage: row.encoding_stage, error: row.encoding_error };
 });
 
+app.get('/api/v1/watch-history', async (request) => {
+  const user = await requireUser(request);
+  const { data: histData, error: histErr } = await supabase.from('watch_history').select('*').eq('user_id', user.id).order('last_watched_at', { ascending: false }).limit(20);
+  if (histErr) throw histErr;
+  const videoIds = (histData ?? []).map((r: any) => r.video_id);
+  if (!videoIds.length) return { data: [] };
+  const { data: vData, error: vErr } = await supabase.from('videos').select('*').in('id', videoIds);
+  if (vErr) throw vErr;
+  const videoMap: Record<string, any> = Object.fromEntries((vData ?? []).map(r => [r.id, toCamel<any>(r)]));
+  const data = (histData ?? []).map((r: any) => ({ ...toCamel<any>(r), video: videoMap[r.video_id] })).filter((r: any) => r.video);
+  return { data };
+});
+app.get('/api/v1/admin/videos', async (request) => {
+  await requireAdmin(request);
+  const query = z.object({ page: z.coerce.number().min(1).default(1), limit: z.coerce.number().min(1).max(100).default(50) }).parse(request.query);
+  const offset = (query.page - 1) * query.limit;
+  const { data, error, count } = await supabase.from('videos').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(offset, offset + query.limit - 1);
+  if (error) throw error;
+  return { data: (data ?? []).map(r => toCamel<any>(r)), total: count ?? 0, page: query.page };
+});
+app.get('/api/v1/admin/stats', async (request) => {
+  await requireAdmin(request);
+  const [published, processing, failed, total] = await Promise.all([
+    supabase.from('videos').select('id', { count: 'exact', head: true }).eq('status', 'PUBLISHED'),
+    supabase.from('videos').select('id', { count: 'exact', head: true }).in('status', ['QUEUED', 'PROCESSING', 'UPLOADING']),
+    supabase.from('videos').select('id', { count: 'exact', head: true }).eq('status', 'FAILED'),
+    supabase.from('videos').select('id', { count: 'exact', head: true }),
+  ]);
+  return { published: published.count ?? 0, processing: processing.count ?? 0, failed: failed.count ?? 0, total: total.count ?? 0 };
+});
 app.post('/api/v1/watch-history', async (request) => {
   const user = await requireUser(request);
   const body = z.object({ videoId: z.string(), positionSeconds: z.number().int().min(0), durationSeconds: z.number().int().positive(), watchedSeconds: z.number().int().min(0) }).parse(request.body);
@@ -328,6 +367,37 @@ app.delete('/api/v1/watchlist/:videoId', async (request, reply) => {
   const user = await requireUser(request);
   const { videoId } = z.object({ videoId: z.string() }).parse(request.params);
   const { error } = await supabase.from('watchlists').delete().eq('user_id', user.id).eq('video_id', videoId);
+  if (error) throw error;
+  reply.code(204).send();
+});
+
+app.get('/api/v1/my-videos', async (request) => {
+  const user = await requireUser(request);
+  const { data, error } = await supabase.from('videos').select('*').eq('owner_id', user.id).order('created_at', { ascending: false });
+  if (error) throw error;
+  return { data: (data ?? []).map(r => toCamel<any>(r)) };
+});
+
+app.patch('/api/v1/my-videos/:id', async (request) => {
+  const user = await requireUser(request);
+  const { id } = z.object({ id: z.string() }).parse(request.params);
+  const body = z.object({ title: z.string().min(1).max(255).optional(), visibility: z.enum(['PRIVATE', 'PUBLIC']).optional() }).parse(request.body);
+  const { data: check } = await supabase.from('videos').select('owner_id, status').eq('id', id).limit(1);
+  if (!check?.[0] || check[0].owner_id !== user.id) throw app.httpErrors.forbidden('Not your video');
+  const updates: Record<string, unknown> = {};
+  if (body.title) updates.title = body.title;
+  if (body.visibility) { updates.visibility = body.visibility; if (body.visibility === 'PUBLIC' && check[0].status === 'READY') updates.status = 'PUBLISHED'; if (body.visibility === 'PRIVATE' && check[0].status === 'PUBLISHED') updates.status = 'READY'; }
+  const { error } = await supabase.from('videos').update(updates).eq('id', id);
+  if (error) throw error;
+  return { ok: true };
+});
+
+app.delete('/api/v1/my-videos/:id', async (request, reply) => {
+  const user = await requireUser(request);
+  const { id } = z.object({ id: z.string() }).parse(request.params);
+  const { data: check } = await supabase.from('videos').select('owner_id').eq('id', id).limit(1);
+  if (!check?.[0] || check[0].owner_id !== user.id) throw app.httpErrors.forbidden('Not your video');
+  const { error } = await supabase.from('videos').delete().eq('id', id);
   if (error) throw error;
   reply.code(204).send();
 });

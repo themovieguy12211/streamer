@@ -23,7 +23,7 @@ export default function Login() {
     const body = await response.json().catch(() => ({}));
     setPending(false);
     if (!response.ok) { setMessage(body.message ?? 'Authentication failed.'); return; }
-    router.push('/');
+    router.push(body.user?.role === 'ADMIN' ? '/admin' : '/dashboard');
     router.refresh();
   };
 
